@@ -1,14 +1,28 @@
 #!/bin/zsh
-# Compila em modo release e empacota em "Sweevi.app".
+# Compila em modo release (universal: Apple Silicon + Intel) e empacota em "Sweevi.app".
+# Funciona só com as Command Line Tools: cada arquitetura é compilada à parte e unida com lipo.
 set -euo pipefail
 cd "$(dirname "$0")"
 
-swift build -c release
+# Mínimo: macOS 12 (Monterey).
+# As Command Line Tools atuais não trazem a fatia Intel da biblioteca de compatibilidade do Swift
+# (libswiftCompatibility56), exigida abaixo do macOS 13. Por isso a fatia Intel é compilada sem ela:
+# abre no Monterey, mas fica sem as correções de concorrência que essa biblioteca aplica no 12.x.
+BINARIES=()
+for ARCH in arm64 x86_64; do
+    echo "==> Compilando para $ARCH"
+    FLAGS=(-c release --triple "$ARCH-apple-macosx12.0" --scratch-path ".build/$ARCH")
+    if [[ "$ARCH" == x86_64 ]]; then
+        FLAGS+=(-Xswiftc -runtime-compatibility-version -Xswiftc none)
+    fi
+    swift build "${FLAGS[@]}"
+    BINARIES+=("$(swift build "${FLAGS[@]}" --show-bin-path)/Sweevi")
+done
 
 APP="Sweevi.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "$(swift build -c release --show-bin-path)/Sweevi" "$APP/Contents/MacOS/Sweevi"
+lipo -create "${BINARIES[@]}" -output "$APP/Contents/MacOS/Sweevi"
 cp Branding/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 
 cat > "$APP/Contents/Info.plist" <<'PLIST'
@@ -29,11 +43,11 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0</string>
+    <string>1.1</string>
     <key>CFBundleVersion</key>
-    <string>1</string>
+    <string>2</string>
     <key>LSMinimumSystemVersion</key>
-    <string>14.0</string>
+    <string>12.0</string>
     <key>NSHighResolutionCapable</key>
     <true/>
 </dict>
@@ -41,4 +55,5 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 PLIST
 
 codesign --force --sign - "$APP" >/dev/null 2>&1 || true
+echo "Arquiteturas: $(lipo -archs "$APP/Contents/MacOS/Sweevi")"
 echo "Pronto: $PWD/$APP"

@@ -41,6 +41,3 @@ struct SweeviLogo: View {
     }
 }
 
-#Preview {
-    SweeviLogo().frame(width: 200, height: 200).padding()
-}

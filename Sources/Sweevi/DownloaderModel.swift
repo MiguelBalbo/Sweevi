@@ -1,36 +1,27 @@
 import AppKit
-import Observation
+import Combine
 
-@Observable
 @MainActor
-final class DownloaderModel {
-    var url = ""
-    var info: VideoInfo?
-    var options: [DownloadOption] = []
-    var rawOptions: [DownloadOption] = []
-    var selectedID: DownloadOption.ID?
+final class DownloaderModel: ObservableObject {
+    @Published var url = ""
+    @Published var info: VideoInfo?
+    @Published var options: [DownloadOption] = []
+    @Published var rawOptions: [DownloadOption] = []
+    @Published var selectedID: DownloadOption.ID?
 
-    var isFetching = false
-    var isDownloading = false
-    var progress: Double?
-    var status = ""
-    var errorMessage: String?
-    var downloadedFile: URL?
+    @Published var isFetching = false
+    @Published var isDownloading = false
+    @Published var progress: Double?
+    @Published var status = ""
+    @Published var errorMessage: String?
+    @Published var downloadedFile: URL?
+    @Published var showAllFormats = false
 
-    var folder: URL {
-        didSet { UserDefaults.standard.set(folder.path, forKey: "downloadFolder") }
-    }
-
-    let isInstalled = YTDLP.executable != nil
     private var task: Task<Void, Never>?
+    private let credentials: CredentialStore
 
-    init() {
-        if let saved = UserDefaults.standard.string(forKey: "downloadFolder") {
-            folder = URL(fileURLWithPath: saved)
-        } else {
-            folder = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
-                ?? URL(fileURLWithPath: NSHomeDirectory())
-        }
+    init(credentials: CredentialStore) {
+        self.credentials = credentials
     }
 
     var selectedOption: DownloadOption? {
@@ -49,7 +40,7 @@ final class DownloaderModel {
 
     func fetch() {
         guard canFetch else { return }
-        let link = url.trimmingCharacters(in: .whitespaces)
+        let link = DownloadQueue.clean(url)
         info = nil
         options = []
         rawOptions = []
@@ -63,7 +54,9 @@ final class DownloaderModel {
         task = Task {
             defer { isFetching = false }
             do {
-                let info = try await YTDLP.fetchInfo(url: link)
+                let auth = credentials.session(for: .ytdlp)
+                defer { credentials.finish(auth) }
+                let info = try await YTDLP.fetchInfo(url: link, extraArguments: auth.arguments)
                 self.info = info
                 options = DownloadOption.options(for: info)
                 rawOptions = (info.formats ?? []).filter { $0.hasVideo || $0.hasAudio }.reversed().map(DownloadOption.raw)
@@ -75,10 +68,9 @@ final class DownloaderModel {
         }
     }
 
-    func download() {
+    func download(to folder: URL) {
         guard let option = selectedOption, !isDownloading else { return }
-        let link = url.trimmingCharacters(in: .whitespaces)
-        let folder = folder
+        let link = DownloadQueue.clean(url)
         errorMessage = nil
         downloadedFile = nil
         progress = nil
@@ -86,12 +78,16 @@ final class DownloaderModel {
         isDownloading = true
 
         task = Task {
+            let auth = credentials.session(for: .ytdlp)
+            defer { credentials.finish(auth) }
             let (events, continuation) = AsyncStream.makeStream(of: DownloadEvent.self)
             let consumer = Task {
                 for await event in events { handle(event) }
             }
             do {
-                try await YTDLP.download(url: link, option: option, folder: folder) { continuation.yield($0) }
+                try await YTDLP.download(url: link, arguments: option.arguments, folder: folder, extraArguments: auth.arguments) {
+                    continuation.yield($0)
+                }
                 continuation.finish()
                 await consumer.value
                 status = "Concluído"
@@ -115,18 +111,6 @@ final class DownloaderModel {
         task?.cancel()
     }
 
-    func chooseFolder() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.canCreateDirectories = true
-        panel.directoryURL = folder
-        panel.prompt = "Escolher"
-        if panel.runModal() == .OK, let url = panel.url {
-            folder = url
-        }
-    }
-
     func revealInFinder() {
         guard let downloadedFile else { return }
         NSWorkspace.shared.activateFileViewerSelecting([downloadedFile])
@@ -134,6 +118,8 @@ final class DownloaderModel {
 
     private func handle(_ event: DownloadEvent) {
         switch event {
+        case .title:
+            break
         case let .progress(percent, speed, eta):
             progress = percent.map { $0 / 100 }
             var text = "Baixando"

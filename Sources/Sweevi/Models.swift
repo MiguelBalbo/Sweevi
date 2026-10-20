@@ -119,3 +119,56 @@ struct DownloadOption: Identifiable, Hashable, Sendable {
         )
     }
 }
+
+// MARK: - Modos de download
+
+enum MediaMode: String, CaseIterable, Identifiable {
+    case video, music
+    var id: String { rawValue }
+    var title: String { self == .video ? "Vídeo" : "Música" }
+    var icon: String { self == .video ? "film" : "music.note" }
+    /// Ferramentas necessárias para este modo.
+    var tools: [Tool] { self == .video ? [.ytdlp, .ffmpeg] : [.spotdl, .ffmpeg] }
+}
+
+/// Qualidade usada no download de vídeos em massa (os formatos variam de link para link).
+enum VideoPreset: String, CaseIterable, Identifiable, Sendable {
+    case best, p1080, p720, p480, audio
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .best: "Melhor qualidade"
+        case .p1080: "Até 1080p"
+        case .p720: "Até 720p"
+        case .p480: "Até 480p"
+        case .audio: "Somente áudio (MP3)"
+        }
+    }
+
+    var arguments: [String] {
+        switch self {
+        case .best: ["-f", "bv*+ba/b", "--merge-output-format", "mp4"]
+        case .p1080: Self.upTo(1080)
+        case .p720: Self.upTo(720)
+        case .p480: Self.upTo(480)
+        case .audio: ["-f", "ba/b", "-x", "--audio-format", "mp3"]
+        }
+    }
+
+    private static func upTo(_ height: Int) -> [String] {
+        ["-f", "bv*[height<=\(height)]+ba/b[height<=\(height)]", "--merge-output-format", "mp4"]
+    }
+}
+
+enum MusicFormat: String, CaseIterable, Identifiable, Sendable {
+    case mp3, m4a, flac, opus, ogg, wav
+    var id: String { rawValue }
+    var title: String { rawValue.uppercased() }
+}
+
+enum MusicBitrate: String, CaseIterable, Identifiable, Sendable {
+    case auto, k128 = "128k", k192 = "192k", k256 = "256k", k320 = "320k"
+    var id: String { rawValue }
+    var title: String { self == .auto ? "Automática" : rawValue.replacingOccurrences(of: "k", with: " kbps") }
+}
